@@ -1,36 +1,55 @@
-# This is a basic workflow to help you get started with Actions
+name: "Demo: Azure Group Management with Approval"
 
-name: CI
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      operation:
+        description: 'Action'
+        required: true
+        type: choice
+        options: [add, remove]
+      display_name:
+        description: 'User Display Name'
+        required: true
+        type: string
+      target_group:
+        description: 'Select Group'
+        required: true
+        type: choice
+        options:
+          - github-developer
+          - github-user
+          - github-admin
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  manage-membership:
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+    # This line is the magic: it triggers the approval UI if the group is admin
+    environment: ${{ github.event.inputs.target_group == 'github-admin' && 'admin-approval' || 'none' }}
+    
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
+      - name: Resolve IDs and Execute
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            # 1. Resolve Group ID
+            GROUP_ID=$(az ad group list --filter "displayName eq '${{ github.event.inputs.target_group }}'" --query "[0].id" -o tsv)
+            if [ -z "$GROUP_ID" ]; then echo "Group not found"; exit 1; fi
 
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
-        run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+            # 2. Resolve User ID
+            USER_ID=$(az ad user list --filter "displayName eq '${{ github.event.inputs.display_name }}'" --query "[0].id" -o tsv)
+            if [ -z "$USER_ID" ]; then echo "User not found"; exit 1; fi
+
+            # 3. Perform Operation
+            if [ "${{ github.event.inputs.operation }}" == "add" ]; then
+              az ad group member add --group "$GROUP_ID" --member-id "$USER_ID"
+              echo "Added successfully!"
+            else
+              az ad group member remove --group "$GROUP_ID" --member-id "$USER_ID"
+              echo "Removed successfully!"
+            fi
